@@ -1,0 +1,91 @@
+//! Database models. One struct per table, mirroring `migrations/20261017133717_initial_schema.sql`.
+//!
+//! Conventions:
+//! * Column names and field names match, so `#[derive(FromRow)]` needs no renames.
+//! * Timestamps are Unix epoch seconds (UTC) stored as INTEGER, so they are `i64`
+//! * `Clone` is derived because iced messages and state may need it.
+
+use sqlx::FromRow;
+
+/// Alias only.
+pub type Timestamp = i64;
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Folder {
+    pub id: i64,
+    pub name: String,
+    /// `None` = top-level folder.
+    pub parent_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Feed {
+    pub id: i64,
+    pub url: String,
+    pub title: Option<String>,
+    pub site_url: Option<String>,
+    /// Cached favicon image bytes.
+    pub favicon: Option<Vec<u8>>,
+    /// `None` = uncategorized.
+    pub folder_id: Option<i64>,
+
+    // HTTP cache validators: send back as If-None-Match / If-Modified-Since.
+    pub etag: Option<String>,
+    pub http_last_modified: Option<String>,
+
+    pub created_at: Timestamp,
+
+    /// Most recent refresh attempt.
+    pub last_attempt_at: Option<Timestamp>,
+    /// Most recent successful refresh.
+    pub last_fetched_at: Option<Timestamp>,
+    /// Most recent error; clear after a success.
+    pub last_error: Option<String>,
+}
+
+/// Needed to subscribe to a new feed. `id` and `created_at` come from the DB.
+#[derive(Debug, Clone)]
+pub struct NewFeed {
+    pub url: String,
+    pub title: Option<String>,
+    pub site_url: Option<String>,
+    pub folder_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct Article {
+    pub id: i64,
+    pub feed_id: i64,
+
+    pub guid: String,
+
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+
+    /// Published timestamp provided by the feed; may be unknown or wrong.
+    pub published_at: Option<Timestamp>,
+    /// When the article was first saved. Filled by database's default.
+    pub created_at: Timestamp,
+    pub last_fetched_at: Option<Timestamp>,
+
+    pub read: bool,
+    pub saved: bool,
+}
+
+/// An article parsed from a fetched feed, ready to be upserted.
+/// `id`, `created_at`, `read` and `saved` are absent because the database handles them.
+#[derive(Debug, Clone)]
+pub struct NewArticle {
+    pub feed_id: i64,
+    pub guid: String,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+    pub published_at: Option<Timestamp>,
+    pub last_fetched_at: Timestamp,
+}
