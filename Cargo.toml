@@ -2,10 +2,17 @@
 name = "tideline"
 version = "0.1.0"
 edition = "2024"
+description = "A desktop RSS feed reader built with Rust and iced"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/dnlzrgz/tideline"
+authors = ["daniel <contact@dnlzrgz.com>"]
+keywords = ["rss", "atom", "feed-reader", "iced", "desktop"]
+categories = ["gui"]
+publish = false
 
 [dependencies]
 iced = { version = "0.14.0", features=["tokio", "markdown"]}
 sqlx = { version = "0.9.0", features=["sqlite", "runtime-tokio", "macros", "migrate"] }
-tokio = { version = "1.53.3", features=["rt-multi-thread"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
