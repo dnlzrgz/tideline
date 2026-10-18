@@ -53,6 +53,17 @@ pub struct NewFeed {
 }
 
 #[derive(Debug, Clone, FromRow)]
+pub struct FeedListItem {
+    pub id: i64,
+    pub url: String,
+    pub title: Option<String>,
+    pub last_attempt_at: Option<Timestamp>,
+    pub last_fetched_at: Option<Timestamp>,
+    pub last_error: Option<String>,
+    pub unread_count: i64,
+}
+
+#[derive(Debug, Clone, FromRow)]
 pub struct Article {
     pub id: i64,
     pub feed_id: i64,
