@@ -80,15 +80,17 @@ impl FeedRepository {
     }
 }
 
-pub fn normalize_feed_url(input: &str) -> Result<Url, FeedError> {
-    let mut url = Url::parse(input.trim()).map_err(|_| FeedError::InvalidUrl(input.to_owned()))?;
+pub fn normalize_url(input: &str) -> Result<String, FeedError> {
+    let input = input.trim();
+    let invalid = || FeedError::InvalidUrl(input.to_owned());
+    let mut url = Url::parse(input).map_err(|_| invalid())?;
+
     if !matches!(url.scheme(), "http" | "https") {
-        return Err(FeedError::InvalidUrl(input.to_owned()));
+        return Err(invalid());
     }
 
     url.set_fragment(None);
-
-    Ok(url)
+    Ok(url.to_string())
 }
 
 #[cfg(test)]
@@ -117,5 +119,80 @@ mod tests {
             .expect_err("duplicate feed should fail");
 
         assert!(matches!(error, FeedError::AlreadySubscribed));
+    }
+
+    #[sqlx::test]
+    async fn list_is_empty_without_feeds(pool: SqlitePool) {
+        let repo = FeedRepository::new(pool);
+        assert!(repo.list().await.unwrap().is_empty());
+    }
+
+    #[sqlx::test]
+    async fn list_is_ordered_by_id(pool: SqlitePool) {
+        let repo = FeedRepository::new(pool);
+        let a = repo
+            .add(new_feed("https://a.example/feed", None))
+            .await
+            .unwrap();
+        let b = repo
+            .add(new_feed("https://b.example/feed", None))
+            .await
+            .unwrap();
+        let c = repo
+            .add(new_feed("https://c.example/feed", None))
+            .await
+            .unwrap();
+
+        let ids: Vec<i64> = repo.list().await.unwrap().iter().map(|f| f.id).collect();
+
+        assert_eq!(ids, vec![a.id, b.id, c.id]);
+    }
+
+    #[test]
+    fn normalize_url_removes_fragment() {
+        let normalized = normalize_url("https://example.com/feed#section").unwrap();
+        assert_eq!(normalized, "https://example.com/feed");
+    }
+
+    #[test]
+    fn normalize_url_keeps_query() {
+        let normalized = normalize_url("https://example.com/feed?tag=rust").unwrap();
+        assert_eq!(normalized, "https://example.com/feed?tag=rust");
+    }
+
+    #[test]
+    fn normalize_url_accepts_http() {
+        let normalized = normalize_url("http://example.com/feed").unwrap();
+        assert_eq!(normalized, "http://example.com/feed");
+    }
+
+    #[test]
+    fn normalize_url_rejects_missing_scheme() {
+        let error = normalize_url("example.com/feed").unwrap_err();
+        assert!(matches!(error, FeedError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn normalize_url_rejects_ftp_scheme() {
+        let error = normalize_url("ftp://example.com/feed").unwrap_err();
+        assert!(matches!(error, FeedError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn normalize_url_rejects_mailto_scheme() {
+        let error = normalize_url("mailto:someone@example.com").unwrap_err();
+        assert!(matches!(error, FeedError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn normalize_url_rejects_empty_input() {
+        let error = normalize_url("").unwrap_err();
+        assert!(matches!(error, FeedError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn normalize_url_rejects_whitespace_only_input() {
+        let error = normalize_url("   \t\n ").unwrap_err();
+        assert!(matches!(error, FeedError::InvalidUrl(_)));
     }
 }
