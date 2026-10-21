@@ -43,7 +43,6 @@ pub struct Feed {
     pub last_error: Option<String>,
 }
 
-/// Needed to subscribe to a new feed. `id` and `created_at` come from the DB.
 #[derive(Debug, Clone)]
 pub struct NewFeed {
     pub url: String,
@@ -63,6 +62,12 @@ pub struct FeedListItem {
     pub unread_count: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct FeedUpdate {
+    pub title: Option<String>,
+    pub folder_id: Option<i64>,
+}
+
 #[derive(Debug, Clone, FromRow)]
 pub struct Article {
     pub id: i64,
@@ -70,7 +75,7 @@ pub struct Article {
 
     pub guid: String,
 
-    pub url: Option<String>,
+    pub url: String,
     pub title: Option<String>,
     pub author: Option<String>,
     pub summary: Option<String>,
@@ -78,25 +83,41 @@ pub struct Article {
 
     /// Published timestamp provided by the feed; may be unknown or wrong.
     pub published_at: Option<Timestamp>,
-    /// When the article was first saved. Filled by database's default.
     pub created_at: Timestamp,
-    pub last_fetched_at: Option<Timestamp>,
+    pub last_fetched_at: Timestamp,
 
     pub read: bool,
     pub saved: bool,
 }
 
-/// An article parsed from a fetched feed, ready to be upserted.
-/// `id`, `created_at`, `read` and `saved` are absent because the database handles them.
 #[derive(Debug, Clone)]
 pub struct NewArticle {
     pub feed_id: i64,
     pub guid: String,
-    pub url: Option<String>,
+    pub url: String,
     pub title: Option<String>,
     pub author: Option<String>,
     pub summary: Option<String>,
     pub content: Option<String>,
     pub published_at: Option<Timestamp>,
-    pub last_fetched_at: Timestamp,
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct ArticleListItem {
+    pub id: i64,
+    pub feed_id: i64,
+    pub feed_title: Option<String>,
+    pub title: Option<String>,
+    pub url: String,
+    pub summary: Option<String>,
+    pub published_at: Option<Timestamp>,
+    pub created_at: Timestamp,
+    pub read: bool,
+    pub saved: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ArticleUpdate {
+    pub read: Option<bool>,
+    pub saved: Option<bool>,
 }

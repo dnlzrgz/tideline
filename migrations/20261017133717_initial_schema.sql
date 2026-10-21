@@ -46,15 +46,16 @@ CREATE TABLE articles (
     -- Each item belongs to a feed.
     feed_id INTEGER NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
 
-    url TEXT, -- Nullable: URL may appear on multiple feeds.
+    url TEXT NOT NULL,
     title TEXT,
     author TEXT,
     summary TEXT,
     content TEXT,
 
     published_at INTEGER, -- Published provided timestamp; may be unknown.
+
     created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-    last_fetched_at INTEGER,
+    last_fetched_at INTEGER NOT NULL DEFAULT (unixepoch()),
 
     read INTEGER NOT NULL DEFAULT 0 CHECK (read IN (0, 1)),
     saved INTEGER NOT NULL DEFAULT 0 CHECK (saved IN (0, 1)),
