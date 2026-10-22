@@ -1,8 +1,8 @@
-//! Database models. One struct per table, mirroring `migrations/20261017133717_initial_schema.sql`.
+//! Database models. Mirrors `migrations/20261017133717_initial_schema.sql`.
 //!
 //! Conventions:
 //! * Column names and field names match, so `#[derive(FromRow)]` needs no renames.
-//! * Timestamps are Unix epoch seconds (UTC) stored as INTEGER, so they are `i64`
+//! * Timestamps are Unix epoch seconds (UTC) stored as INTEGER (`i64`).
 //! * `Clone` is derived because iced messages and state may need it.
 
 use sqlx::FromRow;

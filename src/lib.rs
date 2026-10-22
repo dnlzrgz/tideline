@@ -5,3 +5,4 @@ pub mod models;
 pub mod repo;
 pub mod state;
 pub mod ui;
+pub mod utils;
