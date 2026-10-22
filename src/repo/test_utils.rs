@@ -3,7 +3,10 @@
 use sqlx::SqlitePool;
 
 use super::feed::FeedRepository;
-use crate::models::{Feed, NewArticle, NewFeed};
+use crate::{
+    models::{Article, Feed, NewArticle, NewFeed},
+    repo::article::ArticleRepository,
+};
 
 pub fn new_feed(url: &str, title: Option<&str>) -> NewFeed {
     NewFeed {
@@ -36,6 +39,13 @@ pub async fn add_feed(pool: &SqlitePool, url: &str) -> i64 {
 
 pub async fn get_feed(repo: &FeedRepository, id: i64) -> Feed {
     repo.get(id).await.expect("get feed").expect("feed exists")
+}
+
+pub async fn get_article(repo: &ArticleRepository, id: i64) -> Article {
+    repo.get(id)
+        .await
+        .expect("get article")
+        .expect("article exists")
 }
 
 pub async fn insert_folder(pool: &SqlitePool, name: &str) -> i64 {
