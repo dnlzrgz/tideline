@@ -1,20 +1,10 @@
-use sqlx::{Error as SqlxError, SqlitePool};
-use thiserror::Error;
+use sqlx::SqlitePool;
 use url::Url;
 
-use crate::models::{Feed, FeedListItem, FeedUpdate, NewFeed};
-
-#[derive(Debug, Error)]
-pub enum FeedError {
-    #[error("you are already subscribed to this feed")]
-    AlreadySubscribed,
-    #[error("feed not found")]
-    NotFound,
-    #[error("invalid URL: {0}")]
-    InvalidUrl(String),
-    #[error("database error: {0}")]
-    Database(#[from] SqlxError),
-}
+use crate::{
+    models::{Feed, FeedListItem, FeedUpdate, NewFeed},
+    repo::error::RepoError,
+};
 
 #[derive(Clone)]
 pub struct FeedRepository {
@@ -26,12 +16,12 @@ impl FeedRepository {
         Self { pool }
     }
 
-    pub async fn add(&self, feed: NewFeed) -> Result<Feed, FeedError> {
-        let result = sqlx::query_as::<_, Feed>(
+    pub async fn add(&self, feed: NewFeed) -> Result<i64, RepoError> {
+        let id = sqlx::query_scalar::<_, i64>(
             r#"
             INSERT INTO feeds (url, title, site_url, folder_id)
             VALUES (?1, ?2, ?3, ?4)
-            RETURNING *
+            RETURNING id
             "#,
         )
         .bind(&feed.url)
@@ -39,18 +29,12 @@ impl FeedRepository {
         .bind(&feed.site_url)
         .bind(feed.folder_id)
         .fetch_one(&self.pool)
-        .await;
+        .await?;
 
-        match result {
-            Ok(feed) => Ok(feed),
-            Err(SqlxError::Database(db_error)) if db_error.is_unique_violation() => {
-                Err(FeedError::AlreadySubscribed)
-            }
-            Err(error) => Err(error.into()),
-        }
+        Ok(id)
     }
 
-    pub async fn list(&self) -> Result<Vec<FeedListItem>, FeedError> {
+    pub async fn list(&self) -> Result<Vec<FeedListItem>, RepoError> {
         sqlx::query_as::<_, FeedListItem>(
             r#"
             SELECT
@@ -70,36 +54,40 @@ impl FeedRepository {
         )
         .fetch_all(&self.pool)
         .await
-        .map_err(FeedError::from)
+        .map_err(RepoError::from)
     }
 
-    pub async fn get(&self, id: i64) -> Result<Option<Feed>, FeedError> {
+    pub async fn get(&self, id: i64) -> Result<Option<Feed>, RepoError> {
         sqlx::query_as::<_, Feed>("SELECT * FROM feeds WHERE id = ?1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(FeedError::from)
+            .map_err(RepoError::from)
     }
 
-    pub async fn update(&self, id: i64, update: FeedUpdate) -> Result<Feed, FeedError> {
-        sqlx::query_as::<_, Feed>(
+    pub async fn update(&self, id: i64, update: FeedUpdate) -> Result<(), RepoError> {
+        let result = sqlx::query(
             r#"
             UPDATE feeds
             SET title = COALESCE(?2, title),
                 folder_id = COALESCE(?3, folder_id)
             WHERE id = ?1
-            RETURNING *
             "#,
         )
         .bind(id)
         .bind(&update.title)
         .bind(update.folder_id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or(FeedError::NotFound)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(RepoError::NotFound);
+        }
+
+        Ok(())
     }
 
-    pub async fn delete(&self, id: i64) -> Result<(), FeedError> {
+    pub async fn delete(&self, id: i64) -> Result<(), RepoError> {
         sqlx::query("DELETE FROM feeds WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)
@@ -109,9 +97,9 @@ impl FeedRepository {
     }
 }
 
-pub fn normalize_url(input: &str) -> Result<String, FeedError> {
+pub fn normalize_url(input: &str) -> Result<String, RepoError> {
     let input = input.trim();
-    let invalid = || FeedError::InvalidUrl(input.to_owned());
+    let invalid = || RepoError::InvalidUrl(input.to_owned());
     let mut url = Url::parse(input).map_err(|_| invalid())?;
 
     if !matches!(url.scheme(), "http" | "https") {
@@ -125,41 +113,9 @@ pub fn normalize_url(input: &str) -> Result<String, FeedError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn new_feed(url: &str, title: Option<&str>) -> NewFeed {
-        NewFeed {
-            url: url.to_owned(),
-            title: title.map(str::to_owned),
-            site_url: None,
-            folder_id: None,
-        }
-    }
-
-    async fn insert_article(pool: &SqlitePool, feed_id: i64, guid: &str, url: &str, read: bool) {
-        sqlx::query("INSERT INTO articles (feed_id, guid, url, read) VALUES (?1, ?2, ?3, ?4)")
-            .bind(feed_id)
-            .bind(guid)
-            .bind(url)
-            .bind(read)
-            .execute(pool)
-            .await
-            .expect("insert article");
-    }
-
-    async fn count_articles(pool: &SqlitePool) -> i64 {
-        sqlx::query_scalar("SELECT COUNT(*) FROM articles")
-            .fetch_one(pool)
-            .await
-            .expect("count articles")
-    }
-
-    async fn insert_folder(pool: &SqlitePool, name: &str) -> i64 {
-        sqlx::query_scalar("INSERT INTO folders (name) VALUES (?1) RETURNING id")
-            .bind(name)
-            .fetch_one(pool)
-            .await
-            .expect("insert folder")
-    }
+    use crate::repo::test_utils::{
+        count_articles, get_feed, insert_article, insert_folder, new_feed,
+    };
 
     #[sqlx::test]
     async fn add_duplicated_url_fails(pool: SqlitePool) {
@@ -173,15 +129,15 @@ mod tests {
             .await
             .expect_err("duplicate feed should fail");
 
-        assert!(matches!(error, FeedError::AlreadySubscribed));
+        assert!(matches!(error, RepoError::AlreadyExists));
     }
 
     #[sqlx::test]
-    async fn add_returns_the_inserted_values(pool: SqlitePool) {
+    async fn add_adds_a_new_feed_with_the_correct_values(pool: SqlitePool) {
         let folder_id = insert_folder(&pool, "Tech").await;
         let repo = FeedRepository::new(pool);
 
-        let feed = repo
+        let feed_id = repo
             .add(NewFeed {
                 url: "https://example.com/feed".to_owned(),
                 title: Some("Example".to_owned()),
@@ -190,7 +146,9 @@ mod tests {
             })
             .await
             .expect("add feed");
+        let feed = get_feed(&repo, feed_id).await;
 
+        assert_eq!(feed.id, feed_id);
         assert_eq!(feed.url, "https://example.com/feed");
         assert_eq!(feed.title.as_deref(), Some("Example"));
         assert_eq!(feed.site_url.as_deref(), Some("https://example.com"));
@@ -211,13 +169,7 @@ mod tests {
             .await
             .expect_err("feed with a nonexistent folder should fail");
 
-        match error {
-            FeedError::Database(SqlxError::Database(db_error)) => {
-                assert!(db_error.is_foreign_key_violation());
-            }
-            other => panic!("expected a foreign key violation, got {other:?}"),
-        }
-
+        assert!(matches!(error, RepoError::InvalidReference));
         assert!(repo.list().await.expect("list feeds").is_empty());
     }
 
@@ -251,9 +203,9 @@ mod tests {
             .await
             .expect("add feed b");
 
-        insert_article(&pool, a.id, "a1", "https://a.example/1", false).await;
-        insert_article(&pool, a.id, "a2", "https://a.example/2", true).await;
-        insert_article(&pool, b.id, "b1", "https://b.example/1", false).await;
+        insert_article(&pool, a, "a1", "https://a.example/1", false).await;
+        insert_article(&pool, a, "a2", "https://a.example/2", true).await;
+        insert_article(&pool, b, "b1", "https://b.example/1", false).await;
 
         let counts: Vec<(i64, i64)> = repo
             .list()
@@ -263,7 +215,7 @@ mod tests {
             .map(|f| (f.id, f.unread_count))
             .collect();
 
-        assert_eq!(counts, vec![(a.id, 1), (b.id, 1)]);
+        assert_eq!(counts, vec![(a, 1), (b, 1)]);
     }
 
     #[sqlx::test]
@@ -275,13 +227,13 @@ mod tests {
     #[sqlx::test]
     async fn update_changes_title(pool: SqlitePool) {
         let repo = FeedRepository::new(pool);
-        let feed = repo
+        let id = repo
             .add(new_feed("https://example.com/feed", None))
             .await
             .expect("add feed");
 
         repo.update(
-            feed.id,
+            id,
             FeedUpdate {
                 title: Some("Rust Blog".to_owned()),
                 folder_id: None,
@@ -290,12 +242,8 @@ mod tests {
         .await
         .expect("update feed");
 
-        let reloaded = repo
-            .get(feed.id)
-            .await
-            .expect("get feed")
-            .expect("feed still exists");
-        assert_eq!(reloaded.title.as_deref(), Some("Rust Blog"));
+        let feed = get_feed(&repo, id).await;
+        assert_eq!(feed.title.as_deref(), Some("Rust Blog"));
     }
 
     #[sqlx::test]
@@ -312,19 +260,19 @@ mod tests {
             .await
             .expect_err("update non-existent feed should fail");
 
-        assert!(matches!(error, FeedError::NotFound));
+        assert!(matches!(error, RepoError::NotFound));
     }
 
     #[sqlx::test]
     async fn delete_removes_the_feed(pool: SqlitePool) {
         let repo = FeedRepository::new(pool);
-        let feed = repo
+        let id = repo
             .add(new_feed("https://example.com/feed", None))
             .await
             .expect("add feed");
 
-        repo.delete(feed.id).await.expect("delete feed");
-        assert_eq!(repo.list().await.expect("list feeds").len(), 0);
+        repo.delete(id).await.expect("delete feed");
+        assert!(repo.get(id).await.expect("get feed").is_none());
     }
 
     #[sqlx::test]
@@ -336,16 +284,16 @@ mod tests {
     #[sqlx::test]
     async fn delete_removes_the_feeds_articles(pool: SqlitePool) {
         let repo = FeedRepository::new(pool.clone());
-        let feed = repo
+        let id = repo
             .add(new_feed("https://example.com/feed", None))
             .await
             .expect("add feed");
 
-        insert_article(&pool, feed.id, "a", "https://example.com/a", false).await;
-        insert_article(&pool, feed.id, "b", "https://example.com/b", true).await;
+        insert_article(&pool, id, "a", "https://example.com/a", false).await;
+        insert_article(&pool, id, "b", "https://example.com/b", true).await;
         assert_eq!(count_articles(&pool).await, 2);
 
-        repo.delete(feed.id).await.expect("delete feed");
+        repo.delete(id).await.expect("delete feed");
         assert_eq!(count_articles(&pool).await, 0);
     }
 
@@ -372,31 +320,31 @@ mod tests {
     #[test]
     fn normalize_url_rejects_missing_scheme() {
         let error = normalize_url("example.com/feed").expect_err("url should be rejected");
-        assert!(matches!(error, FeedError::InvalidUrl(_)));
+        assert!(matches!(error, RepoError::InvalidUrl(_)));
     }
 
     #[test]
     fn normalize_url_rejects_ftp_scheme() {
         let error = normalize_url("ftp://example.com/feed").expect_err("url should be rejected");
-        assert!(matches!(error, FeedError::InvalidUrl(_)));
+        assert!(matches!(error, RepoError::InvalidUrl(_)));
     }
 
     #[test]
     fn normalize_url_rejects_mailto_scheme() {
         let error =
             normalize_url("mailto:someone@example.com").expect_err("url should be rejected");
-        assert!(matches!(error, FeedError::InvalidUrl(_)));
+        assert!(matches!(error, RepoError::InvalidUrl(_)));
     }
 
     #[test]
     fn normalize_url_rejects_empty_input() {
         let error = normalize_url("").expect_err("url should be rejected");
-        assert!(matches!(error, FeedError::InvalidUrl(_)));
+        assert!(matches!(error, RepoError::InvalidUrl(_)));
     }
 
     #[test]
     fn normalize_url_rejects_whitespace_only_input() {
         let error = normalize_url("   \t\n ").expect_err("url should be rejected");
-        assert!(matches!(error, FeedError::InvalidUrl(_)));
+        assert!(matches!(error, RepoError::InvalidUrl(_)));
     }
 }
